@@ -79,11 +79,9 @@ router.post("/login", authLimiter, async (req, res) => {
         res.cookie("accessToken", accessToken, cookieOpts);
         res.cookie("refreshToken", refreshToken, cookieOpts);
 
+        // Tokens are set as HttpOnly cookies above — never expose them in the JSON body
         return res.status(200).json({
             success: true,
-            sessionId: session.id,
-            token: accessToken,
-            accessToken: accessToken,
             user
         });
     } catch (err) {

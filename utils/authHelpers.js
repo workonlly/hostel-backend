@@ -42,13 +42,14 @@ function generateAccessToken(payload) {
     return jwt.sign(payload, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRY });
 }
 
-function getCookieOptions(req) {
+function getCookieOptions(req, maxAge = 30 * 24 * 60 * 60 * 1000) {
     const isProduction = process.env.NODE_ENV === "production" || Boolean(process.env.RENDER) || Boolean(process.env.RENDER_EXTERNAL_URL);
     return {
         httpOnly: true,
         secure: isProduction,
         sameSite: isProduction ? "none" : "lax",
-        path: "/"
+        path: "/",
+        maxAge // default 30 days. Without maxAge, it becomes a "Session Cookie" and clears when tab/browser closes.
     };
 }
 

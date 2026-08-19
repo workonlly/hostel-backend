@@ -6,6 +6,7 @@ const helmet = require("helmet");
 
 const signup = require("./auth/sigup.js");
 const login = require("./auth/login.js");
+const me = require("./auth/me.js");
 const loginAuthority = require("./auth/login-authority.js");
 const refresh = require("./auth/refresh.js");
 const logout = require("./auth/logout.js");
@@ -120,9 +121,11 @@ app.use((req, res, next) => {
 // Authentication routes
 app.use("/api/auth", signup);
 app.use("/api/auth", login);
+app.use("/api/auth", me);
 app.use("/api/auth", refresh);
 app.use("/api/auth", logout);
 app.use("/api/authority", loginAuthority);
+app.use("/api/authority", me);
 app.use("/api/authority", refresh);
 app.use("/api/authority", logout);
 

@@ -93,12 +93,9 @@ router.post('/refresh', authLimiter, async (req, res) => {
         res.cookie('accessToken', newAccessToken, cookieOpts);
         res.cookie('refreshToken', newRefreshToken, cookieOpts);
 
+        // Tokens are set as HttpOnly cookies above — never expose them in the JSON body
         return res.status(200).json({
             success: true,
-            token: newAccessToken,
-            accessToken: newAccessToken,
-            refreshToken: newRefreshToken,
-            sessionId: session.id,
         });
     } catch (err) {
         console.error('Refresh token error:', err);
