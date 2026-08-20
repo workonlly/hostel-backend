@@ -17,6 +17,7 @@ const outpass = require("./outpass/outpass.js");
 const guard = require("./guard/guard.js");
 const hostelGuard = require("./guard/hostelGuard.js");
 const pool = require("./db/db");
+const logger = require("./utils/logger");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -76,6 +77,7 @@ app.use(helmet());
 app.use(express.json({ limit: "100kb" }));
 app.use(express.urlencoded({ extended: true, limit: "100kb" }));
 app.use(cookieParser());
+app.use(logger.requestMiddleware());
 
 // CSRF Origin validation for mutating requests (applies when relying on ambient cookies)
 app.use((req, res, next) => {
@@ -108,6 +110,12 @@ app.use((req, res, next) => {
         /^http:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/.test(originHostname);
 
     if (!isAllowed) {
+        logger.security("Blocked unauthorized cross-origin request", {
+            method: req.method,
+            path: req.originalUrl,
+            origin: originHostname,
+            ip: req.ip
+        });
         return res.status(403).json({
             success: false,
             message: "Cross-Origin Request Blocked by Security Policy"
@@ -190,7 +198,12 @@ app.use((err, req, res, next) => {
     const message = err.message || "Internal Server Error";
 
     if (statusCode >= 500) {
-        console.error("[SERVER ERROR]:", err);
+        logger.error(`Unhandled Server Error: ${message}`, err, {
+            path: req.originalUrl,
+            method: req.method,
+            ip: req.ip,
+            statusCode
+        });
     }
 
     return res.status(statusCode).json({
@@ -203,7 +216,7 @@ app.use((err, req, res, next) => {
 
 if (require.main === module) {
     app.listen(PORT, () => {
-        console.log(`Server running on port ${PORT}`);
+        logger.info(`Hostel Backend server listening successfully on port ${PORT}`);
     });
 }
 

@@ -42,14 +42,18 @@ function generateAccessToken(payload) {
     return jwt.sign(payload, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRY });
 }
 
-function getCookieOptions(req) {
+function getCookieOptions(req, maxAgeMs = DEFAULT_REFRESH_TOKEN_TTL_MS) {
     const isProduction = process.env.NODE_ENV === "production" || Boolean(process.env.RENDER) || Boolean(process.env.RENDER_EXTERNAL_URL);
-    return {
+    const options = {
         httpOnly: true,
         secure: isProduction,
         sameSite: isProduction ? "none" : "lax",
         path: "/"
     };
+    if (maxAgeMs !== undefined && maxAgeMs !== null) {
+        options.maxAge = maxAgeMs;
+    }
+    return options;
 }
 
 module.exports = {

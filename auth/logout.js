@@ -28,7 +28,15 @@ router.post('/logout', async (req, res) => {
                 actorId = decoded.id;
                 actorType = decoded.role;
             } catch (ignore) {
-                // If token is invalid or expired
+                // If token is expired, decode payload anyway to extract sessionId
+                const decoded = jwt.decode(token);
+                if (decoded) {
+                    if (decoded.sessionId && !sessionId) {
+                        sessionId = decoded.sessionId;
+                    }
+                    actorId = decoded.id;
+                    actorType = decoded.role;
+                }
             }
         }
 
@@ -36,14 +44,7 @@ router.post('/logout', async (req, res) => {
         if (req.body?.allDevices && actorId) {
             await deactivateUserSessions(actorId, actorType);
         } else if (sessionId) {
-            // Verify session ownership if actorId is known, or ensure session exists
-            const existingSession = await findSessionById(sessionId);
-            if (existingSession) {
-                // Only allow session closure if the authenticated actor owns this session or token matches
-                if (!actorId || String(existingSession.actor_id) === String(actorId)) {
-                    await closeSession(sessionId);
-                }
-            }
+            await closeSession(sessionId);
         }
 
         // Clear cookies with matching options
