@@ -13,15 +13,26 @@ const {
     generateAccessToken,
     getCookieOptions
 } = require("../utils/authHelpers");
-const { createSession } = require("../utils/sessionService");
+const { createSession, checkSessionConflict, getActiveSessionFromRequest, deactivateUserSessions } = require("../utils/sessionService");
 
 router.post("/login", authLimiter, async (req, res) => {
     try {
-        const { email, password, role } = req.body;
+        const { email, password, role, forceLogout } = req.body;
         if (!email || !password) {
             return res.status(400).json({ success: false, message: "Email and password are required" });
         }
         const normalizedEmail = String(email || "").trim().toLowerCase();
+
+        // 1. Check for conflicting active sessions (e.g., student attempting login while admin is active)
+        const conflict = await checkSessionConflict(req, "student", null, { forceLogout: Boolean(forceLogout) });
+        if (conflict.hasConflict) {
+            return res.status(409).json({
+                success: false,
+                conflict: true,
+                currentRole: conflict.currentRole,
+                message: conflict.message
+            });
+        }
 
         // Note: Currently only supporting "student" role logic.
         const userCheck = await pool.query(
@@ -65,7 +76,7 @@ router.post("/login", authLimiter, async (req, res) => {
 
 router.post("/verify-login-otp", otpVerifyLimiter, async (req, res) => {
     try {
-        const { email, otp, role } = req.body;
+        const { email, otp, role, forceLogout } = req.body;
         const normalizedEmail = String(email || "").trim().toLowerCase();
         const hashedOtp = crypto.createHash("sha256").update(String(otp).trim()).digest("hex");
 
@@ -89,14 +100,34 @@ router.post("/verify-login-otp", otpVerifyLimiter, async (req, res) => {
              FROM students s
              LEFT JOIN room r ON r.id = s.physical_room_id
              WHERE s.email = $1`,
-            [email]
+            [normalizedEmail]
         );
+
+        if (userCheck.rows.length === 0) {
+            return res.status(401).json({ success: false, message: "Student account not found" });
+        }
+
         const user = userCheck.rows[0];
 
+        // Check for session conflict before issuing tokens
+        const conflict = await checkSessionConflict(req, "student", user.id, { forceLogout: Boolean(forceLogout) });
+        if (conflict.hasConflict) {
+            return res.status(409).json({
+                success: false,
+                conflict: true,
+                currentRole: conflict.currentRole,
+                message: conflict.message
+            });
+        }
+
+        // Deactivate older active sessions for this student on fresh login
+        await deactivateUserSessions(user.id, "STUDENT");
+
         // 1. Prepare session details
+        const refreshTtl = getRefreshTokenExpiry("student");
         const refreshToken = generateRefreshToken();
         const refreshTokenHash = await hashRefreshToken(refreshToken);
-        const refreshExpiresAt = new Date(Date.now() + getRefreshTokenExpiry("student"));
+        const refreshExpiresAt = new Date(Date.now() + refreshTtl);
         const ipAddress = getClientIp(req);
         const userAgent = req.headers["user-agent"] || null;
 
@@ -125,12 +156,13 @@ router.post("/verify-login-otp", otpVerifyLimiter, async (req, res) => {
         delete user.password;
         user.physical_room_id = user.room_number || user.physical_room_id;
         delete user.room_number;
+        user.role = "student";
 
         // Cleanup OTP record
         await pool.query("DELETE FROM otp_verification WHERE id = $1", [otpRecord.id]);
 
-        // Set pure HttpOnly cookies (SameSite=none for cross-domain Render deployments)
-        const cookieOpts = getCookieOptions(req);
+        // Set persistent HttpOnly cookies
+        const cookieOpts = getCookieOptions(req, refreshTtl);
         res.cookie("token", accessToken, cookieOpts);
         res.cookie("accessToken", accessToken, cookieOpts);
         res.cookie("refreshToken", refreshToken, cookieOpts);
@@ -149,4 +181,73 @@ router.post("/verify-login-otp", otpVerifyLimiter, async (req, res) => {
     }
 });
 
+/**
+ * GET /api/auth/me - Validates existing student session and auto-refreshes token if needed
+ */
+router.get("/me", async (req, res) => {
+    try {
+        const active = await getActiveSessionFromRequest(req);
+        if (!active || !active.session) {
+            return res.status(401).json({
+                success: false,
+                message: "No active session. Please log in."
+            });
+        }
+
+        const isStudent = active.session.actor_type === "STUDENT" || active.session.role === "student";
+        if (!isStudent) {
+            return res.status(403).json({
+                success: false,
+                conflict: true,
+                currentRole: active.session.role || "authority",
+                message: `Active session belongs to '${active.session.role || "authority"}'. Please log in through the appropriate portal.`
+            });
+        }
+
+        const userResult = await pool.query(
+            `SELECT s.*, r.room_number AS room_number
+             FROM students s
+             LEFT JOIN room r ON r.id = s.physical_room_id
+             WHERE s.id = $1`,
+            [active.session.actor_id]
+        );
+
+        if (userResult.rows.length === 0) {
+            return res.status(401).json({ success: false, message: "Student record not found" });
+        }
+
+        const user = userResult.rows[0];
+        delete user.password;
+        user.physical_room_id = user.room_number || user.physical_room_id;
+        delete user.room_number;
+        user.role = "student";
+
+        // If access token was expired, silently reissue fresh access token
+        if (active.needsRefresh) {
+            const refreshTtl = getRefreshTokenExpiry("student");
+            const newAccessToken = generateAccessToken({
+                id: user.id,
+                email: user.email,
+                role: "student",
+                hostel: user.hostel,
+                sessionId: active.session.id
+            });
+            const cookieOpts = getCookieOptions(req, refreshTtl);
+            res.cookie("token", newAccessToken, cookieOpts);
+            res.cookie("accessToken", newAccessToken, cookieOpts);
+        }
+
+        return res.status(200).json({
+            success: true,
+            user,
+            role: "student",
+            sessionId: active.session.id
+        });
+    } catch (err) {
+        console.error("Auth me error:", err);
+        return res.status(500).json({ success: false, message: "Internal server error" });
+    }
+});
+
 module.exports = router;
+

@@ -142,6 +142,120 @@ async function updateSessionRefresh(sessionId, { refreshTokenHash, refreshExpire
     return result.rows[0] || null;
 }
 
+const jwt = require('jsonwebtoken');
+
+const JWT_SECRET = process.env.JWT_SECRET;
+
+/**
+ * Inspects incoming request to retrieve currently active session (from token, cookie, or header)
+ */
+async function getActiveSessionFromRequest(req) {
+    if (!req) return null;
+    let token = req.cookies?.accessToken || req.cookies?.token;
+    const authHeader = req.headers?.authorization || '';
+
+    if (!token && authHeader.startsWith('Bearer ')) {
+        token = authHeader.slice(7).trim();
+    } else if (!token && req.headers?.token) {
+        token = req.headers.token;
+    }
+
+    if (!token) return null;
+
+    try {
+        let decoded = null;
+        let isExpired = false;
+
+        try {
+            decoded = jwt.verify(token, JWT_SECRET);
+        } catch (jwtErr) {
+            if (jwtErr.name === 'TokenExpiredError') {
+                isExpired = true;
+                decoded = jwt.decode(token);
+            } else {
+                return null;
+            }
+        }
+
+        if (!decoded || !decoded.sessionId) {
+            return null;
+        }
+
+        const session = await findSessionById(decoded.sessionId);
+        if (!session || !session.is_active) {
+            return null;
+        }
+
+        // If session refresh window is expired, treat as inactive
+        if (session.refresh_expires_at && new Date() > new Date(session.refresh_expires_at)) {
+            await closeSession(session.id);
+            return null;
+        }
+
+        return {
+            session,
+            decoded,
+            token,
+            isExpired,
+            needsRefresh: isExpired
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * Checks if the request is attempting to log in while an active session for another role/user exists.
+ * Returns { hasConflict: boolean, message?: string, currentRole?: string, activeSession?: object }
+ */
+async function checkSessionConflict(req, targetRole, targetActorId = null, options = {}) {
+    const active = await getActiveSessionFromRequest(req);
+    if (!active || !active.session) {
+        return { hasConflict: false };
+    }
+
+    // If caller specified forceLogout, terminate the existing conflicting session cleanly
+    if (options.forceLogout) {
+        await closeSession(active.session.id);
+        return {
+            hasConflict: false,
+            wasTerminated: true,
+            previousSession: active.session
+        };
+    }
+
+    const existingRole = String(active.session.role || active.session.actor_type || '').toLowerCase();
+    const reqTargetRole = String(targetRole || '').toLowerCase();
+
+    const isExistingStudent = existingRole === 'student' || active.session.actor_type === 'STUDENT';
+    const isTargetStudent = reqTargetRole === 'student';
+
+    // Conflict Scenario 1: Cross-Role (Student active while attempting Authority login, or vice-versa)
+    if (isExistingStudent !== isTargetStudent) {
+        const currentRoleDisplay = active.session.role || (isExistingStudent ? 'student' : 'authority');
+        return {
+            hasConflict: true,
+            activeSession: active.session,
+            currentRole: currentRoleDisplay,
+            currentActorId: active.session.actor_id,
+            message: `An active session for '${currentRoleDisplay}' is already running in this browser. Please log out first before logging in as ${targetRole}.`
+        };
+    }
+
+    // Conflict Scenario 2: Different user account within the same role category
+    if (targetActorId && String(active.session.actor_id) !== String(targetActorId)) {
+        return {
+            hasConflict: true,
+            activeSession: active.session,
+            currentRole: active.session.role,
+            currentActorId: active.session.actor_id,
+            message: `Another ${isTargetStudent ? 'student' : 'authority'} account is already logged in on this browser. Please log out first.`
+        };
+    }
+
+    return { hasConflict: false };
+}
+
 module.exports = {
     normalizeActorType,
     createSession,
@@ -150,4 +264,7 @@ module.exports = {
     closeSession,
     deactivateUserSessions,
     updateSessionRefresh,
+    getActiveSessionFromRequest,
+    checkSessionConflict,
 };
+

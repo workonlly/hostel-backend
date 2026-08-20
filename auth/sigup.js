@@ -14,7 +14,7 @@ const {
     generateAccessToken,
     getCookieOptions
 } = require("../utils/authHelpers");
-const { createSession } = require("../utils/sessionService");
+const { createSession, checkSessionConflict, deactivateUserSessions } = require("../utils/sessionService");
 
 const COLLEGE_EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@nith\.ac\.in$/;
 
@@ -25,12 +25,23 @@ function hashOtp(otp) {
 // 1. /send-otp
 router.post("/send-otp", otpLimiter, async (req, res) => {
     try {
-        const { email } = req.body;
+        const { email, forceLogout } = req.body;
         const normalizedEmail = String(email || "").trim().toLowerCase();
         
         // Strict email domain validation
         if (!normalizedEmail || !COLLEGE_EMAIL_REGEX.test(normalizedEmail)) {
             return res.status(400).json({ success: false, message: "Invalid college email. Must be a valid @nith.ac.in address." });
+        }
+
+        // Check for conflicting active sessions (e.g. authority active)
+        const conflict = await checkSessionConflict(req, "student", null, { forceLogout: Boolean(forceLogout) });
+        if (conflict.hasConflict) {
+            return res.status(409).json({
+                success: false,
+                conflict: true,
+                currentRole: conflict.currentRole,
+                message: conflict.message
+            });
         }
 
         // Check if user already exists
@@ -97,11 +108,22 @@ router.post("/verify-signup-otp", otpVerifyLimiter, async (req, res) => {
 // 3. /signup
 router.post("/signup", authLimiter, async (req, res) => {
     try {
-        const { name, email, password, phone, hostel, room, department, rollno, degree_type, academic_year } = req.body;
+        const { name, email, password, phone, hostel, room, department, rollno, degree_type, academic_year, forceLogout } = req.body;
         const normalizedEmail = String(email || "").trim().toLowerCase();
 
         if (!normalizedEmail || !COLLEGE_EMAIL_REGEX.test(normalizedEmail)) {
             return res.status(400).json({ success: false, message: "Invalid college email. Must be a valid @nith.ac.in address." });
+        }
+
+        // Check for session conflicts
+        const conflict = await checkSessionConflict(req, "student", null, { forceLogout: Boolean(forceLogout) });
+        if (conflict.hasConflict) {
+            return res.status(409).json({
+                success: false,
+                conflict: true,
+                currentRole: conflict.currentRole,
+                message: conflict.message
+            });
         }
 
         // Verify that email was recently verified (within last 15 mins)
@@ -149,10 +171,14 @@ router.post("/signup", authLimiter, async (req, res) => {
 
             await client.query("COMMIT");
             
+            // Deactivate any existing active sessions
+            await deactivateUserSessions(studentId, "STUDENT");
+
             // Generate Session & Tokens for Auto-Login
+            const refreshTtl = getRefreshTokenExpiry("student");
             const refreshToken = generateRefreshToken();
             const refreshTokenHash = await hashRefreshToken(refreshToken);
-            const refreshExpiresAt = new Date(Date.now() + getRefreshTokenExpiry("student"));
+            const refreshExpiresAt = new Date(Date.now() + refreshTtl);
             const ipAddress = getClientIp(req);
             const userAgent = req.headers["user-agent"] || null;
 
@@ -194,8 +220,8 @@ router.post("/signup", authLimiter, async (req, res) => {
                 state: null
             };
 
-            // Set pure HttpOnly cookies (SameSite=none for cross-domain Render deployments)
-            const cookieOpts = getCookieOptions(req);
+            // Set persistent HttpOnly cookies
+            const cookieOpts = getCookieOptions(req, refreshTtl);
             res.cookie("token", accessToken, cookieOpts);
             res.cookie("accessToken", accessToken, cookieOpts);
             res.cookie("refreshToken", refreshToken, cookieOpts);

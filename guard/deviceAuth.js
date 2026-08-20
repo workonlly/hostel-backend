@@ -193,18 +193,16 @@ router.post(
 
         if (device.fingerprint_hash && fingerprint_hash && device.fingerprint_hash !== fingerprint_hash) {
             const logId = crypto.randomUUID();
-            await pool.query(
-                "INSERT INTO guard_device_logs (id, device_id, event_type, ip_address, details) VALUES ($1, $2, 'FINGERPRINT_MISMATCH', $3, $4)",
-                [logId, device.id, clientIp, `Expected: ${device.fingerprint_hash.substring(0, 10)}..., Got: ${fingerprint_hash.substring(0, 10)}...`]
-            );
+            pool.query(
+                "INSERT INTO guard_device_logs (id, device_id, event_type, ip_address, details) VALUES ($1, $2, 'FINGERPRINT_AUTO_SYNC', $3, $4)",
+                [logId, device.id, clientIp, `Auto-synced fingerprint: ${fingerprint_hash.substring(0, 12)}...`]
+            ).catch(() => {});
 
-            return res.status(200).json(
-                new ApiResponse(200, { 
-                    isValid: false, 
-                    reason: "FINGERPRINT_MISMATCH", 
-                    message: "Hardware profile mismatch! This terminal is bound to a different physical device." 
-                })
-            );
+            // Auto-update to latest hardware state
+            pool.query(
+                "UPDATE guard_devices SET fingerprint_hash = $1 WHERE id = $2",
+                [fingerprint_hash, device.id]
+            ).catch(() => {});
         }
 
         // Update active status

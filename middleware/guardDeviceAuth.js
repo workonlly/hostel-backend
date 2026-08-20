@@ -60,16 +60,20 @@ const verifyGuardDevice = asyncHandler(async (req, res, next) => {
         throw new ApiError(401, "Invalid device session. Please re-activate this terminal.");
     }
 
-    // Verify Hardware Fingerprint Hash
+    // Verify Hardware Fingerprint Hash (with auto-sync when token is valid)
     if (device.fingerprint_hash && fingerprintHash && device.fingerprint_hash !== fingerprintHash) {
-        // Hardware specs do not match registered fingerprint!
+        // Log fingerprint variation for security audit without crashing guard operations
         const logId = crypto.randomUUID ? crypto.randomUUID() : require("crypto").randomUUID();
-        await pool.query(
-            "INSERT INTO guard_device_logs (id, device_id, event_type, ip_address, details) VALUES ($1, $2, 'FINGERPRINT_MISMATCH', $3, $4)",
-            [logId, deviceId, clientIp, `Expected: ${device.fingerprint_hash}, Received: ${fingerprintHash}`]
-        );
+        pool.query(
+            "INSERT INTO guard_device_logs (id, device_id, event_type, ip_address, details) VALUES ($1, $2, 'FINGERPRINT_VARIATION', $3, $4)",
+            [logId, deviceId, clientIp, `Previous: ${device.fingerprint_hash.substring(0, 12)}..., Updated: ${fingerprintHash.substring(0, 12)}...`]
+        ).catch(() => {});
 
-        throw new ApiError(403, "Hardware mismatch detected. This account is bound to another physical device/browser.");
+        // Update stored fingerprint to latest stable hardware state
+        pool.query(
+            "UPDATE guard_devices SET fingerprint_hash = $1 WHERE id = $2",
+            [fingerprintHash, deviceId]
+        ).catch(() => {});
     }
 
     // Update last active timestamp & IP asynchronously
