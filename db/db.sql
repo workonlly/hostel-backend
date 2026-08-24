@@ -87,7 +87,10 @@ CREATE TABLE IF NOT EXISTS guard_devices(
     last_active_at   TIMESTAMP,
     last_ip          VARCHAR(50),
     created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    guard_type       VARCHAR(20) DEFAULT 'MAIN_GATE' CHECK (guard_type IN ('MAIN_GATE', 'HOSTEL_GATE')),
+    hostel_id        UUID REFERENCES hostel(id) ON DELETE SET NULL,
+    guard_id         TEXT GENERATED ALWAYS AS (id) STORED
 );
 
 CREATE TABLE IF NOT EXISTS guard_device_logs(
@@ -115,7 +118,8 @@ CREATE TABLE IF NOT EXISTS outpass (
     updated_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     approved_at        TIMESTAMP,
     approved_by        TEXT REFERENCES authority(id) ON DELETE SET NULL,
-    is_emergency       BOOLEAN NOT NULL DEFAULT FALSE
+    is_emergency       BOOLEAN NOT NULL DEFAULT FALSE,
+    hostel_std_status  VARCHAR(50) DEFAULT 'In' CHECK (hostel_std_status IN ('In', 'Out'))
 );
 
 CREATE TABLE IF NOT EXISTS outpass_remarks (
@@ -143,7 +147,8 @@ CREATE TABLE IF NOT EXISTS guard_action_log (
     gate        VARCHAR(100) DEFAULT 'Main Gate',
     remark      TEXT,
     actioned_at TIMESTAMP WITH TIME ZONE NOT NULL,
-    received_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    received_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    guard_id    TEXT REFERENCES guard_devices(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS day_scholar (
@@ -186,4 +191,51 @@ ON user_session(actor_id, actor_type, is_active);
 
 CREATE INDEX IF NOT EXISTS idx_user_session_id_active
 ON user_session(id, is_active);
+
+CREATE TABLE IF NOT EXISTS visit_log (
+    id SERIAL PRIMARY KEY,
+    outpass_id TEXT NOT NULL REFERENCES outpass(id) ON DELETE CASCADE,
+    student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    actual_departure TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    actual_arrival TIMESTAMP,
+    remarks TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    gate VARCHAR(100) DEFAULT 'Main Gate',
+    exit_guard_id TEXT,
+    entry_guard_id TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_visit_log_student ON visit_log(student_id);
+CREATE INDEX IF NOT EXISTS idx_visit_log_outpass ON visit_log(outpass_id);
+
+CREATE TABLE IF NOT EXISTS hostel_visit_log (
+    id                 TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    outpass_id         TEXT NOT NULL REFERENCES outpass(id) ON DELETE CASCADE,
+    student_id         TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    hostel_id          UUID REFERENCES hostel(id) ON DELETE SET NULL,
+    hostel_exit_time   TIMESTAMPTZ,
+    hostel_entry_time  TIMESTAMPTZ,
+    exit_guard_id      TEXT REFERENCES guard_devices(id) ON DELETE SET NULL,
+    entry_guard_id     TEXT REFERENCES guard_devices(id) ON DELETE SET NULL,
+    remark             TEXT,
+    auto_exit          BOOLEAN DEFAULT FALSE,
+    created_at         TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at         TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS hostel_guard_action_log (
+    id              TEXT PRIMARY KEY,
+    outpass_id      TEXT NOT NULL,
+    action          VARCHAR(20) NOT NULL CHECK (action IN ('hostel_exit', 'hostel_enter')),
+    gate            VARCHAR(100) DEFAULT 'Hostel Gate',
+    remark          TEXT,
+    guard_id        TEXT REFERENCES guard_devices(id) ON DELETE SET NULL,
+    actioned_at     TIMESTAMPTZ NOT NULL,
+    received_at     TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_outpass_hostel_std_status ON outpass(hostel_std_status);
+CREATE INDEX IF NOT EXISTS idx_hostel_visit_log_outpass ON hostel_visit_log(outpass_id);
+CREATE INDEX IF NOT EXISTS idx_hostel_guard_action_outpass ON hostel_guard_action_log(outpass_id);
 
