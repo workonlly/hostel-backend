@@ -93,6 +93,10 @@ CREATE TABLE IF NOT EXISTS guard_devices(
     guard_id         TEXT GENERATED ALWAYS AS (id) STORED
 );
 
+ALTER TABLE guard_devices ADD COLUMN IF NOT EXISTS guard_type VARCHAR(20) DEFAULT 'MAIN_GATE' CHECK (guard_type IN ('MAIN_GATE', 'HOSTEL_GATE'));
+ALTER TABLE guard_devices ADD COLUMN IF NOT EXISTS hostel_id UUID REFERENCES hostel(id) ON DELETE SET NULL;
+ALTER TABLE guard_devices ADD COLUMN IF NOT EXISTS guard_id TEXT GENERATED ALWAYS AS (id) STORED;
+
 CREATE TABLE IF NOT EXISTS guard_device_logs(
     id          TEXT PRIMARY KEY,
     device_id   TEXT REFERENCES guard_devices(id) ON DELETE CASCADE,
@@ -122,6 +126,8 @@ CREATE TABLE IF NOT EXISTS outpass (
     hostel_std_status  VARCHAR(50) DEFAULT 'In' CHECK (hostel_std_status IN ('In', 'Out'))
 );
 
+ALTER TABLE outpass ADD COLUMN IF NOT EXISTS hostel_std_status VARCHAR(50) DEFAULT 'In' CHECK (hostel_std_status IN ('In', 'Out'));
+
 CREATE TABLE IF NOT EXISTS outpass_remarks (
     id         TEXT PRIMARY KEY,
     outpass_id TEXT NOT NULL REFERENCES outpass(id) ON DELETE CASCADE,
@@ -150,6 +156,8 @@ CREATE TABLE IF NOT EXISTS guard_action_log (
     received_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     guard_id    TEXT REFERENCES guard_devices(id) ON DELETE SET NULL
 );
+
+ALTER TABLE guard_action_log ADD COLUMN IF NOT EXISTS guard_id TEXT REFERENCES guard_devices(id) ON DELETE SET NULL;
 
 CREATE TABLE IF NOT EXISTS day_scholar (
     id          TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
