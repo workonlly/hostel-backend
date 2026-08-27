@@ -140,14 +140,22 @@ router.post("/signup", authLimiter, async (req, res) => {
         }
 
         // Verify that email was recently verified (within last 15 mins)
-        const verifyCheck = await pool.query(
-            "SELECT id, is_verified, created_at FROM otp_verification WHERE person_id = $1 AND is_verified = true AND created_at >= NOW() - INTERVAL '15 minutes' ORDER BY created_at DESC LIMIT 1",
-            [normalizedEmail]
-        );
+        // ===================== TESTING MODE =====================
+        // TODO: Remove TESTING_MODE bypass before going to production.
+        const TESTING_MODE = process.env.TESTING_MODE === "true";
+        if (!TESTING_MODE) {
+            const verifyCheck = await pool.query(
+                "SELECT id, is_verified, created_at FROM otp_verification WHERE person_id = $1 AND is_verified = true AND created_at >= NOW() - INTERVAL '15 minutes' ORDER BY created_at DESC LIMIT 1",
+                [normalizedEmail]
+            );
 
-        if (verifyCheck.rows.length === 0 || !verifyCheck.rows[0].is_verified) {
-            return res.status(403).json({ success: false, message: "Email not verified or verification session expired" });
+            if (verifyCheck.rows.length === 0 || !verifyCheck.rows[0].is_verified) {
+                return res.status(403).json({ success: false, message: "Email not verified or verification session expired" });
+            }
+        } else {
+            console.log(`[TESTING MODE] Skipping email verification check for: ${normalizedEmail}`);
         }
+        // =========================================================
 
         // Hash password
         const hashedPassword = await bcrypt.hash(password, 10);
