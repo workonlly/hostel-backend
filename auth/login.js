@@ -78,21 +78,36 @@ router.post("/verify-login-otp", otpVerifyLimiter, async (req, res) => {
     try {
         const { email, otp, role, forceLogout } = req.body;
         const normalizedEmail = String(email || "").trim().toLowerCase();
-        const hashedOtp = crypto.createHash("sha256").update(String(otp).trim()).digest("hex");
 
-        const otpCheck = await pool.query(
-            "SELECT id, expires_at FROM otp_verification WHERE person_id = $1 AND otp = $2 ORDER BY created_at DESC LIMIT 1",
-            [normalizedEmail, hashedOtp]
-        );
+        // ===================== TESTING MODE =====================
+        // When otp is the master test code, skip real verification.
+        // TODO: Remove this bypass before going to production.
+        const TESTING_OTP = "123456";
+        const isBypassOtp = String(otp).trim() === TESTING_OTP;
 
-        if (otpCheck.rows.length === 0) {
-            return res.status(400).json({ success: false, message: "Invalid OTP" });
+        let otpRecord = null;
+
+        if (!isBypassOtp) {
+            // -- REAL OTP VERIFICATION (commented out for testing) --
+            const hashedOtp = crypto.createHash("sha256").update(String(otp).trim()).digest("hex");
+
+            const otpCheck = await pool.query(
+                "SELECT id, expires_at FROM otp_verification WHERE person_id = $1 AND otp = $2 ORDER BY created_at DESC LIMIT 1",
+                [normalizedEmail, hashedOtp]
+            );
+
+            if (otpCheck.rows.length === 0) {
+                return res.status(400).json({ success: false, message: "Invalid OTP" });
+            }
+
+            otpRecord = otpCheck.rows[0];
+            if (new Date() > new Date(otpRecord.expires_at)) {
+                return res.status(400).json({ success: false, message: "OTP has expired" });
+            }
+        } else {
+            console.log(`[TESTING MODE] Bypass OTP used for: ${normalizedEmail}`);
         }
-
-        const otpRecord = otpCheck.rows[0];
-        if (new Date() > new Date(otpRecord.expires_at)) {
-            return res.status(400).json({ success: false, message: "OTP has expired" });
-        }
+        // =========================================================
 
         // Fetch user data for payload
         const userCheck = await pool.query(
@@ -158,8 +173,10 @@ router.post("/verify-login-otp", otpVerifyLimiter, async (req, res) => {
         delete user.room_number;
         user.role = "student";
 
-        // Cleanup OTP record
-        await pool.query("DELETE FROM otp_verification WHERE id = $1", [otpRecord.id]);
+        // Cleanup OTP record (skipped in testing bypass mode)
+        if (otpRecord) {
+            await pool.query("DELETE FROM otp_verification WHERE id = $1", [otpRecord.id]);
+        }
 
         // Set persistent HttpOnly cookies
         const cookieOpts = getCookieOptions(req, refreshTtl);

@@ -76,27 +76,40 @@ router.post("/verify-signup-otp", otpVerifyLimiter, async (req, res) => {
     try {
         const { email, otp } = req.body;
         const normalizedEmail = String(email || "").trim().toLowerCase();
-        const hashedOtp = hashOtp(otp);
 
-        const otpCheck = await pool.query(
-            "SELECT id, expires_at FROM otp_verification WHERE person_id = $1 AND otp = $2 ORDER BY created_at DESC LIMIT 1",
-            [normalizedEmail, hashedOtp]
-        );
+        // ===================== TESTING MODE =====================
+        // When otp is the master test code, skip real verification.
+        // TODO: Remove this bypass before going to production.
+        const TESTING_OTP = "123456";
+        const isBypassOtp = String(otp).trim() === TESTING_OTP;
 
-        if (otpCheck.rows.length === 0) {
-            return res.status(400).json({ success: false, message: "Invalid OTP" });
+        if (!isBypassOtp) {
+            // -- REAL OTP VERIFICATION (commented out for testing) --
+            const hashedOtp = hashOtp(otp);
+
+            const otpCheck = await pool.query(
+                "SELECT id, expires_at FROM otp_verification WHERE person_id = $1 AND otp = $2 ORDER BY created_at DESC LIMIT 1",
+                [normalizedEmail, hashedOtp]
+            );
+
+            if (otpCheck.rows.length === 0) {
+                return res.status(400).json({ success: false, message: "Invalid OTP" });
+            }
+
+            const otpRecord = otpCheck.rows[0];
+            if (new Date() > new Date(otpRecord.expires_at)) {
+                return res.status(400).json({ success: false, message: "OTP has expired" });
+            }
+
+            // Mark as verified
+            await pool.query(
+                "UPDATE otp_verification SET is_verified = true WHERE id = $1",
+                [otpRecord.id]
+            );
+        } else {
+            console.log(`[TESTING MODE] Bypass OTP used for signup: ${normalizedEmail}`);
         }
-
-        const otpRecord = otpCheck.rows[0];
-        if (new Date() > new Date(otpRecord.expires_at)) {
-            return res.status(400).json({ success: false, message: "OTP has expired" });
-        }
-
-        // Mark as verified
-        await pool.query(
-            "UPDATE otp_verification SET is_verified = true WHERE id = $1",
-            [otpRecord.id]
-        );
+        // =========================================================
 
         return res.status(200).json({ success: true, message: "OTP verified" });
     } catch (err) {
